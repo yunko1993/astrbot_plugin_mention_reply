@@ -1,7 +1,8 @@
 name: astrbot_plugin_mention_reply
 desc: "群友专属回复助手，被 @ 时自动替你说出预设台词。"
-version: "1.4.7"
+version: "1.4.8"
 author: "qingcai"
 repo: "https://github.com/yunko1993/astrbot_plugin_mention_reply"
 main: main.py
 priority: 0  # 确保最高优先级拦截大模型
+
