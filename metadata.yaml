@@ -1,0 +1,14 @@
+name: astrbot_plugin_mention_reply
+desc: "群友专属回复助手，被 @ 时自动替你说出预设台词，支持权限管理和全局开关。"
+version: "1.2.1"
+author: "qingcai"
+repo: "https://github.com/yunko9319/astrbot_plugin_mention_reply"
+tags:
+  - 娱乐
+  - 群管
+  - 互动
+  - 整活
+main: main.py
+config:
+  items: []
+priority: 5
