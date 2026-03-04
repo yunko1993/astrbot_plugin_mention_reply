@@ -8,16 +8,17 @@ from astrbot.core.platform import AstrMessageEvent
 
 logger = logging.getLogger("astrbot")
 
-@register("astrbot_plugin_mention_reply", "qingcai", "群友专属回复助手", "1.8.5")
+@register("astrbot_plugin_mention_reply", "qingcai", "群友专属回复助手", "1.8.6")
 class MentionReplyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
         
-        # ✅ 听取千问的建议：存入安全的 data 目录，防止更新被覆盖
-        # 这个文件会出现在 AstrBot 根目录下的 data 文件夹里
-        self.db_path = os.path.join("data", "mention_reply_config.json")
+        # ✅ 标准路径：存放在 data/plugin_data/插件名/ 目录下
+        self.data_dir = os.path.join("data", "plugin_data", "astrbot_plugin_mention_reply")
+        self.db_path = os.path.join(self.data_dir, "mention_reply_config.json")
+        
         self.config = self._load_config()
-        logger.info(f"===== [群友嘴替助手] 已加载，数据路径: {self.db_path} =====")
+        logger.info(f"===== [群友嘴替助手] 已加载，标准数据路径: {self.db_path} =====")
 
     def _load_config(self):
         if os.path.exists(self.db_path):
@@ -28,8 +29,8 @@ class MentionReplyPlugin(Star):
         return {"enabled": True, "admin_qq":["1023902556"], "replies": {}}
 
     def _save_config(self):
-        # 确保 data 目录存在
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        # 自动创建多级目录
+        os.makedirs(self.data_dir, exist_ok=True)
         with open(self.db_path, "w", encoding="utf-8") as f:
             json.dump(self.config, f, ensure_ascii=False, indent=4)
 
@@ -67,7 +68,6 @@ class MentionReplyPlugin(Star):
             "4. `/toggle` (总开关)"
         )
 
-    # ❌ 坚决不用千问的参数自动解析，保留咱们的实战无敌解析法
     @filter.command("setreply")
     async def set_reply(self, event: AstrMessageEvent):
         if str(event.get_sender_id()) not in self.config.get("admin_qq",[]): return
@@ -83,8 +83,6 @@ class MentionReplyPlugin(Star):
             return
 
         msg = getattr(event, 'message_str', '')
-        
-        # 暴力洗牌：清洗所有可能的指令前缀和 At 标记
         msg = re.sub(r'^/?setreply\s*', '', msg, flags=re.IGNORECASE)
         msg = re.sub(r'\[At:\d+\]', '', msg)
         msg = re.sub(r'<at qq="\d+"/>', '', msg)
