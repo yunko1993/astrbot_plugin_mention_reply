@@ -43,7 +43,7 @@
    > 机器人: `他现在不在，有事烧纸。`
 
 ## ⚙️ 配置文件
-首次运行或设置后，插件会在自身目录下生成 `mention_reply_config.json`。如需添加管理员，请修改 `admin_qq` 列表。
+首次运行或设置后，插件会在Astrbot/data/plugin_data/目录下生成 `mention_reply_config.json`。如需添加管理员，请修改 `admin_qq` 列表。
 
 ```json
 {
@@ -59,7 +59,7 @@
 
 ## 📝 其他信息
 - **作者**: qingcai
-- **版本**: 1.8.0
+- **版本**: 1.8.5
 - **协议**: MIT License
 
 如有问题或建议，欢迎提交 Issue！
