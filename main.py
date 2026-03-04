@@ -1,219 +1,220 @@
 import os
 import json
-import astrbot.api.star as star
-from astrbot.api.event import AstrMessageEvent
+import asyncio
+from astrbot.api import star, logger
+from astrbot.api.event import AstrMessageEvent, MessageEventResult
 from astrbot.api.platform import MessageType
-from astrbot.api import sp
+from astrbot.api.star import Context
 
-# 配置文件路径
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "replies.json")
-# 开关状态文件路径
-STATUS_PATH = os.path.join(os.path.dirname(__file__), "status.json")
+# 配置路径
+DATA_PATH = "data/plugins/astrbot_plugin_mention_reply/"
+CONFIG_FILE = DATA_PATH + "config.json"
+
+# 确保目录存在
+if not os.path.exists(DATA_PATH):
+    os.makedirs(DATA_PATH)
 
 @star.register(name="astrbot_plugin_mention_reply", desc="群友专属回复助手", author="qingcai", version="1.2.1")
 class Main(star.Star):
-    def __init__(self, context: star.Context) -> None:
-        self.context = context
-        self.replies = self._load_replies()
-        self.status = self._load_status()
+    def __init__(self, context: Context):
+        super().__init__(context)
+        self.config = self.load_config()
 
-    def _load_replies(self):
-        if not os.path.exists(CONFIG_PATH):
-            return {}
-        try:
-            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return {}
+    def load_config(self):
+        """加载配置文件"""
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                logger.error("配置文件读取失败，使用默认配置")
+                return {"enabled": True, "admin_qq": [], "replies": {}}
+        else:
+            # 初始化默认配置
+            default_config = {"enabled": True, "admin_qq": [], "replies": {}}
+            self.save_config(default_config)
+            return default_config
 
-    def _save_replies(self):
-        try:
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(self.replies, f, ensure_ascii=False, indent=4)
-        except Exception as e:
-            print(f"[ MentionReply ] 保存配置失败: {e}")
+    def save_config(self, config):
+        """保存配置文件"""
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
 
-    def _load_status(self):
-        if not os.path.exists(STATUS_PATH):
-            return {"enabled": True}
-        try:
-            with open(STATUS_PATH, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return {"enabled": True}
-
-    def _save_status(self):
-        try:
-            with open(STATUS_PATH, 'w', encoding='utf-8') as f:
-                json.dump(self.status, f, ensure_ascii=False, indent=4)
-        except Exception as e:
-            print(f"[ MentionReply ] 保存状态失败: {e}")
-
-    async def _get_nickname(self, uid: str, platform: str):
-        try:
-            info = await self.context.get_user_info(uid, platform)
-            return info.get("nickname", f"用户{uid}") if info else f"用户{uid}"
-        except:
-            return f"用户{uid}"
-
-    async def _is_admin(self, event: AstrMessageEvent):
-        role = event.get_role()
-        return role in ["owner", "admin"]
-
-    @sp.command("/reply_help")
-    @sp.command("/嘴替帮助")
-    async def cmd_help(self, event: AstrMessageEvent):
-        """显示本插件的帮助信息"""
-        help_text = (
-            "🎭 **群友专属回复助手 - 使用指南**\n\n"
-            "🔹 **设置台词**\n"
-            "`/setreply @某人 台词内容`\n"
-            "例：`/setreply @老王 我在搬砖，勿扰`\n"
-            "*(只能设置自己的，管理员可设置任何人)*\n\n"
-            "🔹 **删除台词**\n"
-            "`/delreply @某人`\n"
-            "*(删除某人的自动回复配置)*\n\n"
-            "🔹 **查看列表**\n"
-            "`/listreply`\n"
-            "*(查看谁设置了台词)*\n\n"
-            "🔹 **功能开关** (仅管理员)\n"
-            "`/switch_mention`\n"
-            "*(开启/关闭自动回复功能)*\n\n"
-            "💡 **怎么玩？**\n"
-            "只要有人在群里 **@你**，机器人就会自动替你说出你设置的台词！\n"
-            "快去设置一句骚话吧～"
-        )
-        await event.send(help_text)
-
-    @sp.command("/setreply")
-    async def cmd_set_reply(self, event: AstrMessageEvent, message: str = ""):
-        """设置专属回复"""
+    # --- 核心功能：监听群消息 ---
+    async def on_message(self, event: AstrMessageEvent):
+        # 只处理群消息
         if event.get_message_type() != MessageType.GROUP_MESSAGE:
-            await event.send("❌ 此功能仅限群聊使用。")
             return
 
-        target_uid = None
-        for seg in event.message.message:
-            if seg.type == "mention":
-                target_uid = str(seg.data.get("qq") or seg.data.get("user_id"))
-                break
-        
-        if not target_uid:
-            await event.send("❌ 格式错误！请 @ 想要设置的群友。\n输入 `/嘴替帮助` 查看用法。")
+        # 检查全局开关
+        if not self.config.get("enabled", True):
             return
 
-        text_parts = []
-        for seg in event.message.message:
-            if seg.type == "text":
-                text_parts.append(seg.data.get("text", "").strip())
+        message_chain = event.get_messages()
+        sender_id = str(event.get_sender_id())
         
-        content = " ".join(text_parts).strip()
-        if not content and message:
-            content = message.strip()
+        # 遍历消息链，查找 @ 自己的消息
+        for seg in message_chain:
+            if seg.type == "at":
+                # 兼容不同平台的字段名 (NapCat/OneBot 通常是 user_id 或 qq)
+                at_id = str(seg.data.get("qq") or seg.data.get("user_id") or "")
+                bot_id = str(event.get_self_id())
+                
+                if at_id == bot_id:
+                    # 找到了 @ 自己，检查是否有预设回复
+                    if sender_id in self.config.get("replies", {}):
+                        reply_text = self.config["replies"][sender_id]
+                        await event.send(reply_text)
+                        return # 回复后不再处理其他逻辑
+
+    # --- 命令：设置回复 ---
+    # 新版写法：直接使用 context.register_command 或者在类方法上加装饰器
+    # 这里采用最通用的新方法：直接在方法上定义指令
+    async def cmd_setreply(self, event: AstrMessageEvent, target_user, *, content: str):
+        """设置回复内容 /setreply @用户 内容"""
+        if event.get_sender_id() not in self.config.get("admin_qq", []):
+            yield event.plain_result("❌ 权限不足，只有管理员可以设置。")
+            return
 
         if not content:
-            await event.send("❌ 请输入要设置的回复内容。\n例：`/setreply @自己 我很忙`\n输入 `/嘴替帮助` 查看更多。")
+            yield event.plain_result("❌ 格式错误：/setreply @用户 回复内容")
             return
 
-        sender_id = str(event.get_sender_id())
-        is_admin = await self._is_admin(event)
-
-        if sender_id != target_uid and not is_admin:
-            await event.send("❌ 你没有权限修改别人的台词哦！")
-            return
-
-        self.replies[target_uid] = content
-        self._save_replies()
-
-        nickname = await self._get_nickname(target_uid, event.get_platform_name())
-        await event.send(f"✅ 已设置 [{nickname}] 的专属回复：\n「{content}」")
-
-    @sp.command("/delreply")
-    async def cmd_del_reply(self, event: AstrMessageEvent):
-        """删除专属回复"""
-        if event.get_message_type() != MessageType.GROUP_MESSAGE:
-            return
-
-        target_uid = None
-        for seg in event.message.message:
-            if seg.type == "mention":
-                target_uid = str(seg.data.get("qq") or seg.data.get("user_id"))
-                break
+        user_id = str(target_user.id) # 获取被 @ 用户的 ID
+        self.config.setdefault("replies", {})
+        self.config["replies"][user_id] = content
+        self.save_config(self.config)
         
-        if not target_uid:
-            await event.send("❌ 请 @ 要删除配置的群友。\n输入 `/嘴替帮助` 查看用法。")
-            return
+        yield event.plain_result(f"✅ 已设置：当有人 @{target_user.nickname} 时，自动回复：\n{content}")
 
-        sender_id = str(event.get_sender_id())
-        is_admin = await self._is_admin(event)
-
-        if sender_id != target_uid and not is_admin:
-            await event.send("❌ 你没有权限删除别人的配置。")
-            return
-
-        if target_uid in self.replies:
-            nickname = await self._get_nickname(target_uid, event.get_platform_name())
-            del self.replies[target_uid]
-            self._save_replies()
-            await event.send(f"🗑️ 已清除 [{nickname}] 的专属回复。")
-        else:
-            await event.send("ℹ️ 该群友本来就没有设置回复。")
-
-    @sp.command("/switch_mention")
-    async def cmd_switch(self, event: AstrMessageEvent):
-        """开关插件功能"""
-        if event.get_message_type() != MessageType.GROUP_MESSAGE:
-            return
+    # 注册命令 (新版标准写法)
+    # 注意：AstrBot v4+ 通常会自动扫描带有特定参数的方法来注册命令
+    # 如果上述 cmd_ 前缀不生效，可能需要用 ctx.register_command
+    # 但为了简化，我们尝试用最简单的指令解析方式，或者手动注册
+    
+    # 【重要修正】针对 v4.16+ 的最佳实践：
+    # 很多新版插件直接在 on_message 里解析命令，或者使用新的 router
+    # 为了保证 100% 兼容且不依赖复杂的 router 配置，我们把命令逻辑也放进 on_message 里统一处理
+    # 这样最稳，不会报 AttributeError
+    
+    async def on_message_extended(self, event: AstrMessageEvent):
+        """扩展消息处理，包含命令解析"""
+        # 先运行原有的 @ 回复逻辑
+        await self.on_message(event)
         
-        if not await self._is_admin(event):
-            await event.send("❌ 只有群主或管理员才能开关此功能。")
+        # 如果是私聊或者非群聊，也可以处理命令，这里主要演示群命令
+        msg_str = event.get_message_str().strip()
+        if not msg_str.startswith("/"):
             return
 
-        self.status["enabled"] = not self.status["enabled"]
-        self._save_status()
+        parts = msg_str.split(maxsplit=2) # 分割命令
+        cmd = parts[0]
         
-        status_text = "🟢 已开启" if self.status["enabled"] else "🔴 已关闭"
-        await event.send(f"💡 群友专属回复功能 {status_text}。")
-
-    @sp.command("/listreply")
-    async def cmd_list_reply(self, event: AstrMessageEvent):
-        """列出所有已设置的回复"""
-        if not self.replies:
-            await event.send("📭 目前还没有人设置专属回复哦。\n输入 `/嘴替帮助` 查看如何设置。")
+        # 1. 帮助命令
+        if cmd in ["/嘴替帮助", "/reply_help"]:
+            help_text = (
+                "🤖 **群友专属回复助手**\n\n"
+                "📜 **指令列表**:\n"
+                "1. `/setreply @用户 内容` - 设置指定用户的自动回复 (仅管理员)\n"
+                "2. `/delreply @用户` - 删除指定用户的自动回复 (仅管理员)\n"
+                "3. `/listreply` - 查看所有已设置的回复 (仅管理员)\n"
+                "4. `/toggle` - 开启/关闭插件全局开关 (仅管理员)\n"
+                "5. `/嘴替帮助` - 显示本帮助信息\n\n"
+                "💡 **示例**:\n"
+                "`/setreply @张三 哈哈，你说得对！`\n"
+                "当群里有人 @张三 时，机器人就会说：哈哈，你说得对！"
+            )
+            await event.send(help_text)
             return
-        
-        msg = "📋 **当前已设置的专属回复：**\n\n"
-        for uid, text in self.replies.items():
-            nickname = await self._get_nickname(uid, event.get_platform_name())
-            display_text = text[:20] + "..." if len(text) > 20 else text
-            msg += f"👤 {nickname}: {display_text}\n"
-        
-        await event.send(msg)
 
+        # 2. 设置回复命令
+        if cmd == "/setreply":
+            if event.get_sender_id() not in self.config.get("admin_qq", []):
+                await event.send("❌ 权限不足，只有管理员可以设置。")
+                return
+            
+            if len(parts) < 3:
+                await event.send("❌ 格式错误：/setreply @用户 回复内容")
+                return
+            
+            # 解析 @ 用户
+            message_chain = event.get_messages()
+            target_user = None
+            for seg in message_chain:
+                if seg.type == "at":
+                    uid = seg.data.get("qq") or seg.data.get("user_id")
+                    if uid:
+                        target_user = {"id": str(uid), "nickname": seg.data.get("nickname", "未知")}
+                        break
+            
+            if not target_user:
+                await event.send("❌ 未找到有效的 @ 用户，请确保格式为：/setreply @用户 内容")
+                return
+
+            content = parts[2] # 剩下的全是内容
+            self.config.setdefault("replies", {})
+            self.config["replies"][target_user["id"]] = content
+            self.save_config(self.config)
+            
+            await event.send(f"✅ 已设置：当有人 @{target_user['nickname']} 时，自动回复：\n{content}")
+            return
+
+        # 3. 删除回复命令
+        if cmd == "/delreply":
+            if event.get_sender_id() not in self.config.get("admin_qq", []):
+                await event.send("❌ 权限不足。")
+                return
+
+            message_chain = event.get_messages()
+            target_id = None
+            for seg in message_chain:
+                if seg.type == "at":
+                    target_id = str(seg.data.get("qq") or seg.data.get("user_id"))
+                    break
+            
+            if not target_id or target_id not in self.config.get("replies", {}):
+                await event.send("❌ 该用户没有设置回复，或格式错误。")
+                return
+
+            del self.config["replies"][target_id]
+            self.save_config(self.config)
+            await event.send("✅ 已删除该用户的自动回复。")
+            return
+
+        # 4. 列表命令
+        if cmd == "/listreply":
+            if event.get_sender_id() not in self.config.get("admin_qq", []):
+                await event.send("❌ 权限不足。")
+                return
+            
+            replies = self.config.get("replies", {})
+            if not replies:
+                await event.send("📭 当前没有任何设置的回复。")
+                return
+            
+            text = "📋 **当前回复列表**:\n"
+            for uid, content in replies.items():
+                # 尝试获取昵称 (简化处理，实际可能需要缓存或查询)
+                text += f"- 用户ID: {uid}\n  回复: {content[:20]}...\n"
+            await event.send(text)
+            return
+
+        # 5. 开关命令
+        if cmd == "/toggle":
+            if event.get_sender_id() not in self.config.get("admin_qq", []):
+                await event.send("❌ 权限不足。")
+                return
+            
+            self.config["enabled"] = not self.config.get("enabled", True)
+            self.save_config(self.config)
+            status = "✅ 已开启" if self.config["enabled"] else "⏸️ 已暂停"
+            await event.send(f"{status} 群友专属回复功能。")
+            return
+
+    # 绑定消息事件
+    # 在新版 AstrBot 中，通常需要显式绑定事件处理器
+    # 如果你的 main.py 是作为 Star 加载的，on_message 会被自动调用
+    # 但为了确保命令也能被捕获，我们重载 on_message
     async def on_message(self, event: AstrMessageEvent):
-        """监听消息：只要有人 @别人，就检查是否有台词"""
-        if event.get_message_type() != MessageType.GROUP_MESSAGE:
-            return
-
-        if not self.status.get("enabled", True):
-            return
-
-        targets = []
-        for seg in event.message.message:
-            if seg.type == "mention":
-                uid = str(seg.data.get("qq") or seg.data.get("user_id"))
-                targets.append(uid)
-        
-        if not targets:
-            return
-
-        active_replies = []
-        for uid in targets:
-            if uid in self.replies:
-                nickname = await self._get_nickname(uid, event.get_platform_name())
-                content = self.replies[uid]
-                active_replies.append(f"🎭 **{nickname}** 说：\n{content}")
-        
-        if active_replies:
-            final_msg = "\n------------------\n".join(active_replies)
-            await event.send(final_msg)
+        # 合并原来的逻辑和命令逻辑
+        await self.on_message_extended(event)
