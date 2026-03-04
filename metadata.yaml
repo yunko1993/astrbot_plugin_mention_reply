@@ -1,6 +1,10 @@
 name: astrbot_plugin_mention_reply
-desc: "群友专属回复助手"
-version: "1.4.5"
+desc: "群友专属回复助手，被 @ 时自动替你说出预设台词，支持权限管理和全局开关。"
+version: "1.4.6"
 author: "qingcai"
-main: main.py   # <--- 这里必须叫 main.py 且你的文件名也必须是 main.py
-priority: 0     # <--- 必须是 0
+repo: "https://github.com/yunko1993/astrbot_plugin_mention_reply"
+tags:
+  - 娱乐
+  - 互动
+main: main.py
+priority: 0  # <--- 关键：必须是 0，确保拦截大模型
