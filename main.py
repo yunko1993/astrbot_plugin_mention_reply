@@ -8,12 +8,14 @@ from astrbot.core.platform import AstrMessageEvent
 
 logger = logging.getLogger("astrbot")
 
-@register("astrbot_plugin_mention_reply", "qingcai", "群友专属回复助手", "1.8.0")
+@register("astrbot_plugin_mention_reply", "qingcai", "群友专属回复助手", "1.8.5")
 class MentionReplyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        # 配置文件存放在插件自身目录下
-        self.db_path = os.path.join(os.path.dirname(__file__), "mention_reply_config.json")
+        
+        # ✅ 听取千问的建议：存入安全的 data 目录，防止更新被覆盖
+        # 这个文件会出现在 AstrBot 根目录下的 data 文件夹里
+        self.db_path = os.path.join("data", "mention_reply_config.json")
         self.config = self._load_config()
         logger.info(f"===== [群友嘴替助手] 已加载，数据路径: {self.db_path} =====")
 
@@ -23,10 +25,11 @@ class MentionReplyPlugin(Star):
                 with open(self.db_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except: pass
-        # 默认填入你的 QQ 作为初始管理员
         return {"enabled": True, "admin_qq":["1023902556"], "replies": {}}
 
     def _save_config(self):
+        # 确保 data 目录存在
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         with open(self.db_path, "w", encoding="utf-8") as f:
             json.dump(self.config, f, ensure_ascii=False, indent=4)
 
@@ -36,7 +39,6 @@ class MentionReplyPlugin(Star):
         if not self.config.get("enabled", True): return
         
         msg_str = getattr(event, 'message_str', '')
-        # 忽略指令类消息，避免冲突
         if msg_str.startswith("/") or "setreply" in msg_str or "delreply" in msg_str: 
             return
 
@@ -49,15 +51,12 @@ class MentionReplyPlugin(Star):
             
             if t_id and t_id in self.config.get("replies", {}):
                 reply_text = self.config["replies"][t_id]
-                logger.info(f"===== [嘴替助手] 拦截到 @{t_id}，触发代答: {reply_text} =====")
+                logger.info(f"=====[嘴替助手] 拦截到 @{t_id}，触发代答: {reply_text} =====")
                 
-                # 发送回复
                 yield event.plain_result(reply_text)
-                # 截断事件，阻止大模型回复
                 event.stop_event()
                 return
 
-    # --- 指令：帮助菜单 ---
     @filter.command("嘴替帮助")
     async def help_cmd(self, event: AstrMessageEvent):
         yield event.plain_result(
@@ -68,7 +67,7 @@ class MentionReplyPlugin(Star):
             "4. `/toggle` (总开关)"
         )
 
-    # --- 指令：设置代答 ---
+    # ❌ 坚决不用千问的参数自动解析，保留咱们的实战无敌解析法
     @filter.command("setreply")
     async def set_reply(self, event: AstrMessageEvent):
         if str(event.get_sender_id()) not in self.config.get("admin_qq",[]): return
@@ -83,7 +82,6 @@ class MentionReplyPlugin(Star):
             yield event.plain_result("⚠️ 识别失败！请务必在指令中 @ 一个用户。")
             return
 
-        # 提取原始消息字符串
         msg = getattr(event, 'message_str', '')
         
         # 暴力洗牌：清洗所有可能的指令前缀和 At 标记
@@ -104,7 +102,6 @@ class MentionReplyPlugin(Star):
         self._save_config()
         yield event.plain_result(f"✅ 设置成功！有人 @{target_id} 时，我会代答：\n{reply}")
 
-    # --- 指令：删除代答 ---
     @filter.command("delreply")
     async def del_reply(self, event: AstrMessageEvent):
         if str(event.get_sender_id()) not in self.config.get("admin_qq",[]): return
@@ -120,7 +117,6 @@ class MentionReplyPlugin(Star):
         else:
             yield event.plain_result("❌ 该用户目前没有设置代答。")
 
-    # --- 指令：查看列表 ---
     @filter.command("listreply")
     async def list_reply(self, event: AstrMessageEvent):
         if not self.config["replies"]:
@@ -129,10 +125,9 @@ class MentionReplyPlugin(Star):
             res = "📋 当前嘴替列表:\n" + "\n".join([f"• {k}: {v}" for k, v in self.config["replies"].items()])
             yield event.plain_result(res)
 
-    # --- 指令：全局开关 ---
     @filter.command("toggle")
     async def toggle_cmd(self, event: AstrMessageEvent):
-        if str(event.get_sender_id()) not in self.config.get("admin_qq", []): return
+        if str(event.get_sender_id()) not in self.config.get("admin_qq",[]): return
         self.config["enabled"] = not self.config.get("enabled", True)
         self._save_config()
         status = '🟢 已开启' if self.config['enabled'] else '🔴 已关闭'
